@@ -1,3 +1,5 @@
+import { pcmProcessorBufferSize } from "@/lib/recording/recording-performance";
+
 export type PcmStreamHandle = {
   stop: () => void;
   sampleRate: number;
@@ -21,7 +23,7 @@ export function startPcmStreamFromMediaStream(
 ): PcmStreamHandle {
   const audioContext = new AudioContext();
   const source = audioContext.createMediaStreamSource(stream);
-  const processor = audioContext.createScriptProcessor(2048, 1, 1);
+  const processor = audioContext.createScriptProcessor(pcmProcessorBufferSize(), 1, 1);
   const silent = audioContext.createGain();
   silent.gain.value = 0;
   source.connect(processor);

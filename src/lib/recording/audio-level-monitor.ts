@@ -1,30 +1,39 @@
+import { audioLevelMeterIntervalMs } from "@/lib/recording/recording-performance";
+
 export function createAudioLevelMonitor(stream: MediaStream, onLevel: (level: number) => void) {
   const audioContext = new AudioContext();
   const source = audioContext.createMediaStreamSource(stream);
   const analyser = audioContext.createAnalyser();
-  analyser.fftSize = 256;
+  analyser.fftSize = 128;
   source.connect(analyser);
 
   const data = new Uint8Array(analyser.frequencyBinCount);
-  let frame = 0;
   let stopped = false;
+  const intervalMs = audioLevelMeterIntervalMs();
 
   const tick = () => {
     if (stopped) {
       return;
     }
     analyser.getByteFrequencyData(data);
-    const average = data.reduce((sum, value) => sum + value, 0) / data.length;
-    onLevel(Math.min(1, average / 90));
-    frame = window.requestAnimationFrame(tick);
+    let sum = 0;
+    for (let i = 0; i < data.length; i += 1) {
+      sum += data[i] ?? 0;
+    }
+    onLevel(Math.min(1, sum / data.length / 90));
   };
 
-  frame = window.requestAnimationFrame(tick);
+  const timer = window.setInterval(tick, intervalMs);
+  void audioContext.resume();
 
   return () => {
     stopped = true;
-    window.cancelAnimationFrame(frame);
+    window.clearInterval(timer);
     source.disconnect();
-    void audioContext.close();
+    if (audioContext.state !== "closed") {
+      void audioContext.close().catch(() => {
+        // Ignore double-close.
+      });
+    }
   };
 }

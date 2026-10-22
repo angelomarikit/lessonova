@@ -1,3 +1,5 @@
+import { mediaRecorderTimesliceMs } from "@/lib/recording/recording-performance";
+
 export type CaptureSource = "teacher_microphone" | "classroom_tab";
 
 export interface ClassroomTabCapture {
@@ -33,9 +35,18 @@ export async function requestTeacherMicrophone(): Promise<MediaStream> {
   });
 }
 
+/** Stop tab video after capture — we only record audio; decoding video steals CPU/GPU from Preply/Meet. */
+export function stopDisplayVideoTracks(displayStream: MediaStream) {
+  for (const track of displayStream.getVideoTracks()) {
+    track.stop();
+  }
+}
+
 export async function requestClassroomTabCapture(): Promise<ClassroomTabCapture> {
   const displayStream = await navigator.mediaDevices.getDisplayMedia({
-    video: true,
+    video: {
+      frameRate: { ideal: 1, max: 5 },
+    },
     audio: true,
   });
 
@@ -82,7 +93,7 @@ export class DualAudioRecorder {
         this.micChunks.push(event.data);
       }
     };
-    this.micRecorder.start(1000);
+    this.micRecorder.start(mediaRecorderTimesliceMs());
 
     if (this.classroomStream && this.classroomStream.getAudioTracks().length > 0) {
       this.classroomRecorder = new MediaRecorder(
@@ -94,7 +105,7 @@ export class DualAudioRecorder {
           this.classroomChunks.push(event.data);
         }
       };
-      this.classroomRecorder.start(1000);
+      this.classroomRecorder.start(mediaRecorderTimesliceMs());
     }
 
     this.accumulatedActiveMs = 0;

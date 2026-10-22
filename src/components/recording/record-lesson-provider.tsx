@@ -21,7 +21,12 @@ import {
   DualAudioRecorder,
   requestClassroomTabCapture,
   requestTeacherMicrophone,
+  stopDisplayVideoTracks,
 } from "@/lib/recording/dual-audio-recorder";
+import {
+  liveCorrectionIntervalSeconds,
+  liveCorrectionsEnabledDuringRecording,
+} from "@/lib/recording/recording-performance";
 import { finalizeLessonRecording } from "@/lib/recording/finalize-lesson-recording";
 import { useLiveTranscriptionSession } from "@/lib/live-transcription/use-live-transcription-session";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
@@ -101,6 +106,8 @@ export function RecordLessonProvider({
   const recorderRef = useRef(new DualAudioRecorder());
   const timerRef = useRef<number | null>(null);
   const levelStopRef = useRef<(() => void)[]>([]);
+  const panelMinimizedRef = useRef(panelMinimized);
+  panelMinimizedRef.current = panelMinimized;
 
   const live = useLiveTranscriptionSession({
     lessonId,
@@ -108,8 +115,8 @@ export function RecordLessonProvider({
     micStream: liveCaptureStreams.mic,
     classroomStream: liveCaptureStreams.tab,
     active: phase === "recording" && !paused,
-    liveCorrectionsEnabled: true,
-    correctionIntervalSeconds: 6,
+    liveCorrectionsEnabled: liveCorrectionsEnabledDuringRecording(),
+    correctionIntervalSeconds: liveCorrectionIntervalSeconds(),
   });
 
   const resetCapture = useCallback(() => {
@@ -256,15 +263,29 @@ export function RecordLessonProvider({
           tab: capture.classroomAudioStream,
         });
 
-        if (capture.displayStream.getVideoTracks()[0]) {
-          capture.displayStream.getVideoTracks()[0]!.onended = () => {
-            setErrorMessage("Classroom tab sharing ended. Stop and save the lesson when ready.");
-          };
+        const onShareEnded = () => {
+          setErrorMessage("Classroom tab sharing ended. Stop and save the lesson when ready.");
+        };
+        for (const track of capture.displayStream.getAudioTracks()) {
+          track.onended = onShareEnded;
         }
+        stopDisplayVideoTracks(capture.displayStream);
 
-        levelStopRef.current.push(createAudioLevelMonitor(micStream, setMicLevel));
+        levelStopRef.current.push(
+          createAudioLevelMonitor(micStream, (level) => {
+            if (!panelMinimizedRef.current) {
+              setMicLevel(level);
+            }
+          }),
+        );
         if (capture.classroomAudioStream) {
-          levelStopRef.current.push(createAudioLevelMonitor(capture.classroomAudioStream, setTabLevel));
+          levelStopRef.current.push(
+            createAudioLevelMonitor(capture.classroomAudioStream, (level) => {
+              if (!panelMinimizedRef.current) {
+                setTabLevel(level);
+              }
+            }),
+          );
         }
 
         recorderRef.current.attachStreams(

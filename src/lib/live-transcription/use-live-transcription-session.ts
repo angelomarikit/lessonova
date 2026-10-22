@@ -2,8 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { DeepgramBrowserLiveSession } from "@/lib/live-transcription/deepgram-browser-live";
+import type { DeepgramBrowserLiveSession } from "@/lib/live-transcription/deepgram-browser-live";
 import { startPcmStreamFromMediaStream } from "@/lib/live-transcription/pcm-from-media-stream";
+import type { MediaStreamAudioTap } from "@/lib/recording/shared-media-stream-audio-tap";
+import {
+  resolveLiveTranscriptionGrant,
+  type LiveGrantPrefetch,
+} from "@/lib/live-transcription/prefetch-live-grant";
 import type {
   LiveChatMessage,
   LiveGrammarSuggestion,
@@ -86,6 +91,10 @@ export function useLiveTranscriptionSession(options: {
   audioStreamKey: string;
   micStream: MediaStream | null;
   classroomStream: MediaStream | null;
+  /** Shared mic tap — one AudioContext for meter + live PCM (avoids duplicate mic processing). */
+  micAudioTap: MediaStreamAudioTap | null;
+  /** Grant request started while the user picks a tab — saves ~200–500ms at connect. */
+  grantPrefetch: LiveGrantPrefetch | null;
   active: boolean;
   liveCorrectionsEnabled: boolean;
   correctionIntervalSeconds: number;
@@ -225,20 +234,17 @@ export function useLiveTranscriptionSession(options: {
     }
 
     void (async () => {
-      const grantResponse = await fetch("/api/live-transcription/grant", { method: "POST" });
-      const grantPayload = (await grantResponse.json()) as {
-        accessToken?: string;
-        model?: string;
-        authProtocol?: "bearer" | "token";
-        relayWebSocketUrl?: string;
-        error?: string;
-      };
+      const [{ DeepgramBrowserLiveSession }, grantResult] = await Promise.all([
+        import("@/lib/live-transcription/deepgram-browser-live"),
+        resolveLiveTranscriptionGrant(optionsRef.current.grantPrefetch),
+      ]);
+      const grantPayload = grantResult.payload;
 
       if (cancelled || generation !== connectGenerationRef.current) {
         return;
       }
 
-      if (!grantResponse.ok || !grantPayload.accessToken) {
+      if (!grantResult.ok || !grantPayload.accessToken) {
         setLiveError(grantPayload.error ?? "Live transcription is unavailable.");
         setLiveConnecting(false);
         return;
@@ -262,19 +268,33 @@ export function useLiveTranscriptionSession(options: {
         setLiveError(null);
       };
 
+      const micTap = optionsRef.current.micAudioTap;
+
       const attach = async (
         stream: MediaStream,
         source: "teacher_microphone" | "classroom_tab",
         role: LiveSpeakerRole,
         attachOptions: { required: boolean },
       ) => {
-        let session: DeepgramBrowserLiveSession | null = null;
+        let session: import("@/lib/live-transcription/deepgram-browser-live").DeepgramBrowserLiveSession | null =
+          null;
         let pcmStarted = false;
-        const pcm = startPcmStreamFromMediaStream(stream, (buffer) => {
-          if (pcmStarted) {
-            session?.sendAudio(buffer);
-          }
-        });
+        let pcmStop: (() => void) | null = null;
+        let pcmConsumer: ((buffer: ArrayBuffer) => void) | null = null;
+        let sampleRate = 48000;
+
+        const useSharedMicTap = source === "teacher_microphone" && micTap;
+        if (useSharedMicTap) {
+          sampleRate = micTap.sampleRate;
+        } else {
+          const pcm = startPcmStreamFromMediaStream(stream, (buffer) => {
+            if (pcmStarted) {
+              session?.sendAudio(buffer);
+            }
+          });
+          sampleRate = pcm.sampleRate;
+          pcmStop = () => pcm.stop();
+        }
 
         try {
           session = await DeepgramBrowserLiveSession.open({
@@ -284,9 +304,15 @@ export function useLiveTranscriptionSession(options: {
             model,
             source,
             speakerRole: role,
-            sampleRate: pcm.sampleRate,
+            sampleRate,
             onOpen: () => {
               pcmStarted = true;
+              if (useSharedMicTap && micTap) {
+                pcmConsumer = (buffer) => {
+                  session?.sendAudio(buffer);
+                };
+                micTap.addPcmConsumer(pcmConsumer);
+              }
               if (source === "teacher_microphone") {
                 micReady = true;
               }
@@ -301,13 +327,16 @@ export function useLiveTranscriptionSession(options: {
                 );
                 return;
               }
-            micFailed = true;
-            setLiveConnecting(false);
-            setLiveConnected(false);
-            setLiveError(message);
-            pcm.stop();
-          },
-          onEvent: (event) => {
+              micFailed = true;
+              setLiveConnecting(false);
+              setLiveConnected(false);
+              setLiveError(message);
+              if (pcmConsumer && micTap) {
+                micTap.removePcmConsumer(pcmConsumer);
+              }
+              pcmStop?.();
+            },
+            onEvent: (event) => {
               if (generation !== connectGenerationRef.current) {
                 return;
               }
@@ -348,25 +377,35 @@ export function useLiveTranscriptionSession(options: {
             setCorrectionHint(
               "Classroom tab live transcript unavailable; mic and recording still work.",
             );
-            pcm.stop();
+            pcmStop?.();
             return;
           }
           micFailed = true;
           setLiveConnecting(false);
           setLiveConnected(false);
           setLiveError(message);
-          pcm.stop();
+          pcmStop?.();
           return;
         }
 
         if (cancelled || generation !== connectGenerationRef.current) {
           session.close();
-          pcm.stop();
+          if (pcmConsumer && micTap) {
+            micTap.removePcmConsumer(pcmConsumer);
+          }
+          pcmStop?.();
           return;
         }
 
         sessionsRef.current.push(session);
-        pcmHandlesRef.current.push(pcm);
+        if (pcmStop) {
+          pcmHandlesRef.current.push({ stop: pcmStop });
+        }
+        if (pcmConsumer && micTap) {
+          pcmHandlesRef.current.push({
+            stop: () => micTap.removePcmConsumer(pcmConsumer!),
+          });
+        }
       };
 
       if (cancelled || generation !== connectGenerationRef.current) {

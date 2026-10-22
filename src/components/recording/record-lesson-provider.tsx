@@ -15,6 +15,11 @@ import { useRouter } from "next/navigation";
 import { RecordLessonFloatingPanel } from "@/components/recording/record-lesson-floating-panel";
 import { RecordLessonModal } from "@/components/recording/record-lesson-modal";
 import { createAudioLevelMonitor } from "@/lib/recording/audio-level-monitor";
+import { startLiveTranscriptionGrantPrefetch } from "@/lib/live-transcription/prefetch-live-grant";
+import type { LiveGrantPrefetch } from "@/lib/live-transcription/prefetch-live-grant";
+import { audioLevelMeterStartDelayMs } from "@/lib/recording/recording-performance";
+import { createMediaStreamAudioTap } from "@/lib/recording/shared-media-stream-audio-tap";
+import type { MediaStreamAudioTap } from "@/lib/recording/shared-media-stream-audio-tap";
 import { detectBrowserCapabilities } from "@/lib/recording/browser-capabilities";
 import { RECORDING_CONSENT_VERSION } from "@/lib/recording/consent";
 import {
@@ -106,6 +111,10 @@ export function RecordLessonProvider({
   const recorderRef = useRef(new DualAudioRecorder());
   const timerRef = useRef<number | null>(null);
   const levelStopRef = useRef<(() => void)[]>([]);
+  const micTapRef = useRef<MediaStreamAudioTap | null>(null);
+  const meterUpdatesEnabledRef = useRef(false);
+  const liveGrantPrefetchRef = useRef<LiveGrantPrefetch | null>(null);
+  const [micAudioTap, setMicAudioTap] = useState<MediaStreamAudioTap | null>(null);
   const panelMinimizedRef = useRef(panelMinimized);
   panelMinimizedRef.current = panelMinimized;
 
@@ -114,6 +123,8 @@ export function RecordLessonProvider({
     audioStreamKey: liveAudioStreamKey,
     micStream: liveCaptureStreams.mic,
     classroomStream: liveCaptureStreams.tab,
+    micAudioTap,
+    grantPrefetch: liveGrantPrefetchRef.current,
     active: phase === "recording" && !paused,
     liveCorrectionsEnabled: liveCorrectionsEnabledDuringRecording(),
     correctionIntervalSeconds: liveCorrectionIntervalSeconds(),
@@ -128,6 +139,11 @@ export function RecordLessonProvider({
       stop();
     }
     levelStopRef.current = [];
+    meterUpdatesEnabledRef.current = false;
+    liveGrantPrefetchRef.current = null;
+    micTapRef.current?.stop();
+    micTapRef.current = null;
+    setMicAudioTap(null);
     recorderRef.current.release();
     micStreamRef.current?.getTracks().forEach((track) => track.stop());
     tabAudioStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -250,18 +266,17 @@ export function RecordLessonProvider({
       setErrorMessage(null);
 
       try {
-        await ensureLessonSession(student, trialLesson);
-
-        const micStream = await requestTeacherMicrophone();
+        const [, micStream] = await Promise.all([
+          ensureLessonSession(student, trialLesson),
+          requestTeacherMicrophone(),
+        ]);
         micStreamRef.current = micStream;
+        liveGrantPrefetchRef.current = startLiveTranscriptionGrantPrefetch();
 
         const capture = await requestClassroomTabCapture();
         displayStreamRef.current = capture.displayStream;
         tabAudioStreamRef.current = capture.classroomAudioStream;
-        setLiveCaptureStreams({
-          mic: micStream,
-          tab: capture.classroomAudioStream,
-        });
+        stopDisplayVideoTracks(capture.displayStream);
 
         const onShareEnded = () => {
           setErrorMessage("Classroom tab sharing ended. Stop and save the lesson when ready.");
@@ -269,33 +284,46 @@ export function RecordLessonProvider({
         for (const track of capture.displayStream.getAudioTracks()) {
           track.onended = onShareEnded;
         }
-        stopDisplayVideoTracks(capture.displayStream);
 
-        levelStopRef.current.push(
-          createAudioLevelMonitor(micStream, (level) => {
-            if (!panelMinimizedRef.current) {
-              setMicLevel(level);
+        micTapRef.current?.stop();
+        const micTap = createMediaStreamAudioTap({
+          stream: micStream,
+          onLevel: (level) => {
+            if (!meterUpdatesEnabledRef.current || panelMinimizedRef.current) {
+              return;
             }
-          }),
-        );
-        if (capture.classroomAudioStream) {
-          levelStopRef.current.push(
-            createAudioLevelMonitor(capture.classroomAudioStream, (level) => {
-              if (!panelMinimizedRef.current) {
-                setTabLevel(level);
-              }
-            }),
-          );
-        }
+            setMicLevel(level);
+          },
+        });
+        micTapRef.current = micTap;
+        setMicAudioTap(micTap);
 
         recorderRef.current.attachStreams(
           micStream,
           capture.classroomAudioStream,
           capture.displayStream,
         );
+        setLiveCaptureStreams({
+          mic: micStream,
+          tab: capture.classroomAudioStream,
+        });
         recorderRef.current.start();
         setElapsedMs(0);
         setPhase("recording");
+
+        const meterDelay = audioLevelMeterStartDelayMs();
+        window.setTimeout(() => {
+          meterUpdatesEnabledRef.current = true;
+          if (capture.classroomAudioStream) {
+            levelStopRef.current.push(
+              createAudioLevelMonitor(capture.classroomAudioStream, (level) => {
+                if (!panelMinimizedRef.current) {
+                  setTabLevel(level);
+                }
+              }),
+            );
+          }
+        }, meterDelay);
       } catch (cause) {
         resetCapture();
         setPhase("pick-student");

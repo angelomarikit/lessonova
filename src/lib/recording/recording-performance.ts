@@ -31,3 +31,22 @@ export function mediaRecorderTimesliceMs(): number {
 export function audioLevelMeterIntervalMs(): number {
   return isRecordingLowCpuMode() ? 200 : 100;
 }
+
+/**
+ * Optional stagger before live STT connects (default 0 — transcription starts with recording).
+ * Set NEXT_PUBLIC_LIVE_TRANSCRIPTION_DEFER_MS only if you need to trade a short gap for smoother UI.
+ */
+export function liveTranscriptionStartDelayMs(): number {
+  if (process.env.NEXT_PUBLIC_LIVE_TRANSCRIPTION_DEFER_MS) {
+    const parsed = Number(process.env.NEXT_PUBLIC_LIVE_TRANSCRIPTION_DEFER_MS);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+  return 0;
+}
+
+/** Delay level meters so the first paint after “Recording” stays smooth. */
+export function audioLevelMeterStartDelayMs(): number {
+  return isRecordingLowCpuMode() ? 800 : 400;
+}

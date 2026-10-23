@@ -23,12 +23,11 @@ export async function POST() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const settings = await getLiveTranscriptionSettings();
-  if (!resolveLiveTranscriptionEnabled(settings)) {
+  if (process.env.LIVE_TRANSCRIPTION_ENABLED === "false") {
     return NextResponse.json(
       {
         error:
-          "Live transcription is off. In development, add DEEPGRAM_API_KEY to .env.local (and avoid LIVE_TRANSCRIPTION_ENABLED=false).",
+          "Live transcription is disabled. Remove LIVE_TRANSCRIPTION_ENABLED=false or turn it on in admin settings.",
       },
       { status: 403 },
     );
@@ -36,8 +35,22 @@ export async function POST() {
 
   if (!isDeepgramConfigured()) {
     return NextResponse.json(
-      { error: "Deepgram is not configured on the server." },
+      {
+        error:
+          "Deepgram is not configured. Add DEEPGRAM_API_KEY to your server environment (e.g. Vercel → Settings → Environment Variables), then redeploy.",
+      },
       { status: 503 },
+    );
+  }
+
+  const settings = await getLiveTranscriptionSettings();
+  if (!resolveLiveTranscriptionEnabled(settings)) {
+    return NextResponse.json(
+      {
+        error:
+          "Live transcription is off in platform settings. Set LIVE_TRANSCRIPTION_ENABLED=true on the server or enable it in Admin → Live transcription.",
+      },
+      { status: 403 },
     );
   }
 

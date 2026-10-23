@@ -2,11 +2,16 @@ import { isAnthropicConfigured } from "@/lib/anthropic/config";
 import { getDeepgramModel, isDeepgramConfigured } from "@/lib/deepgram/config";
 import { createServiceClient } from "@/lib/supabase/service";
 
-/** Dev testing: any teacher account may use live STT when Deepgram is configured. */
+/** @deprecated Use {@link isLiveTranscriptionAutoEnabled} */
 export function isDevLiveTranscriptionAutoEnabled(): boolean {
-  if (process.env.NODE_ENV !== "development") {
-    return false;
-  }
+  return process.env.NODE_ENV === "development" && isLiveTranscriptionAutoEnabled();
+}
+
+/**
+ * When Deepgram is configured, live STT is on unless explicitly disabled.
+ * Works in development and on Vercel (platform DB row may still be false while testing).
+ */
+export function isLiveTranscriptionAutoEnabled(): boolean {
   if (process.env.LIVE_TRANSCRIPTION_ENABLED === "false") {
     return false;
   }
@@ -14,10 +19,16 @@ export function isDevLiveTranscriptionAutoEnabled(): boolean {
 }
 
 export function resolveLiveTranscriptionEnabled(settings: LiveTranscriptionSettings): boolean {
+  if (process.env.LIVE_TRANSCRIPTION_ENABLED === "false") {
+    return false;
+  }
+  if (process.env.LIVE_TRANSCRIPTION_ENABLED === "true") {
+    return true;
+  }
   if (settings.liveTranscriptionEnabled) {
     return true;
   }
-  return isDevLiveTranscriptionAutoEnabled();
+  return isLiveTranscriptionAutoEnabled();
 }
 
 /** Dev testing: show grammar fixes in the live chat without an admin toggle. */
@@ -48,8 +59,7 @@ export function getLiveTranscriptionSettingsFromEnv(): LiveTranscriptionSettings
   const envExplicitOff = process.env.LIVE_TRANSCRIPTION_ENABLED === "false";
   return {
     liveTranscriptionEnabled:
-      envExplicitOn ||
-      (isDevLiveTranscriptionAutoEnabled() && !envExplicitOff),
+      envExplicitOn || (!envExplicitOff && isLiveTranscriptionAutoEnabled()),
     streamingProvider: "deepgram",
     streamingModel: process.env.DEEPGRAM_STREAMING_MODEL?.trim() || getDeepgramModel(),
     liveCorrectionsEnabled: resolveLiveCorrectionsEnabled({

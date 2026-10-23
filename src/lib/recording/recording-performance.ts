@@ -6,22 +6,28 @@ export function isRecordingLowCpuMode(): boolean {
   return process.env.NEXT_PUBLIC_RECORDING_LOW_CPU === "true";
 }
 
+/** Grammar stays on during recording. The live-chat checkbox pauses it. */
 export function liveCorrectionsEnabledDuringRecording(): boolean {
-  if (isRecordingLowCpuMode()) {
-    return false;
-  }
   return process.env.NEXT_PUBLIC_LIVE_CORRECTIONS_WHILE_RECORDING !== "false";
 }
 
 export function liveCorrectionIntervalSeconds(): number {
-  if (isRecordingLowCpuMode()) {
-    return 15;
+  if (process.env.NEXT_PUBLIC_LIVE_CORRECTION_INTERVAL_SECONDS) {
+    const parsed = Number(process.env.NEXT_PUBLIC_LIVE_CORRECTION_INTERVAL_SECONDS);
+    if (Number.isFinite(parsed) && parsed >= 4) {
+      return parsed;
+    }
   }
-  return Number(process.env.NEXT_PUBLIC_LIVE_CORRECTION_INTERVAL_SECONDS ?? "6");
+  return isRecordingLowCpuMode() ? 8 : 6;
 }
 
 export function pcmProcessorBufferSize(): number {
   return isRecordingLowCpuMode() ? 8192 : 4096;
+}
+
+/** Smaller chunks so live words show up quickly (about 40ms at 48 kHz). */
+export function liveSttPcmBufferSize(): number {
+  return 2048;
 }
 
 export function mediaRecorderTimesliceMs(): number {

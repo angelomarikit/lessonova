@@ -43,7 +43,7 @@ export class DeepgramBrowserLiveSession {
   private closed = false;
   private source: LiveCaptureSource;
   private speakerRole: LiveSpeakerRole;
-  private utteranceCounter = 0;
+  private finalCount = 0;
   private onEvent: (event: LiveTranscriptEvent) => void;
   private onError: (message: string) => void;
   private keepAliveTimer: number | null = null;
@@ -88,8 +88,9 @@ export class DeepgramBrowserLiveSession {
       sample_rate: String(Math.round(options.sampleRate)),
       channels: "1",
       interim_results: "true",
-      punctuate: "false",
-      endpointing: "300",
+      punctuate: "true",
+      endpointing: "200",
+      utterance_end_ms: "1000",
     });
 
     const query = params.toString();
@@ -197,10 +198,9 @@ export class DeepgramBrowserLiveSession {
     const isFinal = Boolean(payload.is_final || payload.speech_final);
     const startSec = payload.start ?? 0;
     const durationSec = payload.duration ?? 0;
-    const segmentKey = `${this.source}:u${this.utteranceCounter}`;
-    if (speechFinal) {
-      this.utteranceCounter += 1;
-    }
+    const segmentKey = isFinal
+      ? `${this.source}:final:${this.finalCount++}`
+      : `${this.source}:listening`;
     this.onEvent({
       segmentKey,
       source: this.source,

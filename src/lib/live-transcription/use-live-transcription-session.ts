@@ -25,58 +25,59 @@ function speakerLabelFor(role: LiveSpeakerRole, source: "teacher_microphone" | "
   return "Student/other";
 }
 
-function mergeTranscriptText(previous: string, incoming: string, isFinal: boolean): string {
-  const prev = previous.trim();
-  const next = incoming.trim();
-  if (!next) {
-    return prev;
-  }
-  if (!isFinal) {
-    return next;
-  }
-  if (!prev) {
-    return next;
-  }
-  if (prev.length > next.length + 2) {
-    return prev;
-  }
-  const prevRepeats = maxConsecutiveWordRepeats(prev);
-  const nextRepeats = maxConsecutiveWordRepeats(next);
-  if (prevRepeats > nextRepeats) {
-    return prev;
-  }
-  return next.length >= prev.length ? next : prev;
-}
+/** Newest finalized lines kept on screen (~20 back-and-forth turns). Older lines drop after this. */
+const LIVE_CHAT_KEEP_FINALS = 40;
 
-function maxConsecutiveWordRepeats(text: string): number {
-  const words = text.toLowerCase().split(/\s+/).filter(Boolean);
-  let best = 1;
-  let run = 1;
-  for (let i = 1; i < words.length; i += 1) {
-    if (words[i] === words[i - 1]) {
-      run += 1;
-      best = Math.max(best, run);
-    } else {
-      run = 1;
+function trimLiveChat(list: LiveChatMessage[]): LiveChatMessage[] {
+  const listening = list.filter((item) => !item.isFinal);
+  const finals = list.filter((item) => item.isFinal);
+  const kept =
+    finals.length > LIVE_CHAT_KEEP_FINALS
+      ? finals.slice(finals.length - LIVE_CHAT_KEEP_FINALS)
+      : finals;
+  return [...kept, ...listening].sort((a, b) => {
+    if (a.isFinal !== b.isFinal) {
+      return a.isFinal ? -1 : 1;
     }
-  }
-  return best;
+    return a.receivedAtMs - b.receivedAtMs;
+  });
 }
 
-function mergeLiveMessage(list: LiveChatMessage[], incoming: LiveChatMessage): LiveChatMessage[] {
-  const index = list.findIndex((item) => item.segmentKey === incoming.segmentKey);
-  if (index === -1) {
-    return [...list, incoming].sort((a, b) => a.startedAtMs - b.startedAtMs);
+/**
+ * Final lines are append-only. Only the in-progress "listening" line for each
+ * source is replaced — so earlier turns stay in the chat.
+ */
+function applyLiveChatMessage(list: LiveChatMessage[], incoming: LiveChatMessage): LiveChatMessage[] {
+  const text = incoming.text.trim();
+  if (!text) {
+    return list;
   }
-  const next = [...list];
-  const prior = next[index]!;
-  next[index] = {
-    ...prior,
-    ...incoming,
-    text: mergeTranscriptText(prior.text, incoming.text, incoming.isFinal),
-    isFinal: incoming.isFinal,
-  };
-  return next.sort((a, b) => a.startedAtMs - b.startedAtMs);
+
+  if (!incoming.isFinal) {
+    const index = list.findIndex((item) => item.segmentKey === incoming.segmentKey);
+    if (index === -1) {
+      return trimLiveChat([...list, incoming]);
+    }
+    const next = [...list];
+    const prior = next[index]!;
+    next[index] = {
+      ...incoming,
+      receivedAtMs: prior.receivedAtMs,
+      text,
+    };
+    return trimLiveChat(next);
+  }
+
+  const listeningKey = `${incoming.source}:listening`;
+  let next = list.filter((item) => item.segmentKey !== listeningKey);
+  const normalized = text.toLowerCase();
+  const duplicate = next.some(
+    (item) => item.isFinal && item.source === incoming.source && item.text.trim().toLowerCase() === normalized,
+  );
+  if (!duplicate) {
+    next = [...next, { ...incoming, text }];
+  }
+  return trimLiveChat(next);
 }
 
 function hasLiveAudioTrack(stream: MediaStream | null) {
@@ -203,6 +204,13 @@ export function useLiveTranscriptionSession(options: {
   flushCorrectionsRef.current = flushCorrections;
 
   useEffect(() => {
+    if (correctionsPaused || !optionsRef.current.liveCorrectionsEnabled) {
+      return;
+    }
+    void flushCorrectionsRef.current?.();
+  }, [correctionsPaused]);
+
+  useEffect(() => {
     const opts = optionsRef.current;
     if (!opts.active || !opts.lessonId) {
       teardownMedia();
@@ -263,9 +271,6 @@ export function useLiveTranscriptionSession(options: {
         );
       }
 
-      let micReady = !micNow;
-      let micFailed = false;
-
       const markLive = () => {
         setLiveConnecting(false);
         setLiveConnected(true);
@@ -317,9 +322,6 @@ export function useLiveTranscriptionSession(options: {
                 };
                 micTap.addPcmConsumer(pcmConsumer);
               }
-              if (source === "teacher_microphone") {
-                micReady = true;
-              }
               if (attachOptions.required) {
                 markLive();
               }
@@ -331,7 +333,6 @@ export function useLiveTranscriptionSession(options: {
                 );
                 return;
               }
-              micFailed = true;
               setLiveConnecting(false);
               setLiveConnected(false);
               setLiveError(message);
@@ -352,10 +353,11 @@ export function useLiveTranscriptionSession(options: {
                 speakerLabel: speakerLabelFor(event.speakerRole, event.source),
                 text: event.text,
                 isFinal: event.isFinal,
+                receivedAtMs: Date.now(),
                 startedAtMs: event.startedAtMs,
                 endedAtMs: event.endedAtMs,
               };
-              setMessages((prev) => mergeLiveMessage(prev, chatMessage));
+              setMessages((prev) => applyLiveChatMessage(prev, chatMessage));
 
               if (event.speakerRole === "student" && event.isFinal && event.text.trim()) {
                 const pending = pendingStudentUtterancesRef.current;
@@ -384,7 +386,6 @@ export function useLiveTranscriptionSession(options: {
             pcmStop?.();
             return;
           }
-          micFailed = true;
           setLiveConnecting(false);
           setLiveConnected(false);
           setLiveError(message);
@@ -416,19 +417,16 @@ export function useLiveTranscriptionSession(options: {
         return;
       }
 
+      const attaches: Promise<void>[] = [];
       if (micNow) {
-        await attach(micNow, "teacher_microphone", "teacher", { required: true });
-      } else if (classroomNow) {
-        await attach(classroomNow, "classroom_tab", "student", { required: true });
+        attaches.push(attach(micNow, "teacher_microphone", "teacher", { required: true }));
       }
-
-      if (classroomNow && micNow && !micFailed) {
-        await new Promise((resolve) => window.setTimeout(resolve, 400));
-        if (cancelled || generation !== connectGenerationRef.current || micFailed || !micReady) {
-          return;
-        }
-        await attach(classroomNow, "classroom_tab", "student", { required: false });
+      if (classroomNow) {
+        attaches.push(
+          attach(classroomNow, "classroom_tab", "student", { required: !micNow }),
+        );
       }
+      await Promise.all(attaches);
 
       if (correctionTimerRef.current) {
         window.clearInterval(correctionTimerRef.current);

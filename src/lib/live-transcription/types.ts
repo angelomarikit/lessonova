@@ -9,6 +9,8 @@ export type LiveChatMessage = {
   speakerLabel: string;
   text: string;
   isFinal: boolean;
+  /** When this line was first shown — keeps chat order stable across two audio streams. */
+  receivedAtMs: number;
   startedAtMs: number;
   endedAtMs?: number;
 };

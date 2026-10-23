@@ -1,7 +1,5 @@
-import {
-  audioLevelMeterIntervalMs,
-  pcmProcessorBufferSize,
-} from "@/lib/recording/recording-performance";
+import { audioLevelMeterIntervalMs } from "@/lib/recording/recording-performance";
+import { liveSttPcmBufferSize } from "@/lib/recording/recording-performance";
 
 export type MediaStreamAudioTap = {
   sampleRate: number;
@@ -31,7 +29,7 @@ export function createMediaStreamAudioTap(options: {
     if (processor || stopped) {
       return;
     }
-    processor = audioContext.createScriptProcessor(pcmProcessorBufferSize(), 1, 1);
+    processor = audioContext.createScriptProcessor(liveSttPcmBufferSize(), 1, 1);
     source.connect(processor);
     processor.connect(silent);
     processor.onaudioprocess = (event) => {

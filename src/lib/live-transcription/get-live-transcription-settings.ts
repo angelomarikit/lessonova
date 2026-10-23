@@ -36,15 +36,21 @@ export function resolveLiveTranscriptionEnabled(settings: LiveTranscriptionSetti
   return isLiveTranscriptionAutoEnabled();
 }
 
-/** Dev testing: show grammar fixes in the live chat without an admin toggle. */
+/**
+ * Live grammar is on when Anthropic is configured (local + Vercel), unless explicitly disabled.
+ * The recording checkbox pauses checks in the browser; this flag is the server allow/deny.
+ */
 export function resolveLiveCorrectionsEnabled(settings: LiveTranscriptionSettings): boolean {
   if (process.env.LIVE_CORRECTIONS_ENABLED === "false") {
     return false;
   }
-  if (settings.liveCorrectionsEnabled || process.env.LIVE_CORRECTIONS_ENABLED === "true") {
+  if (process.env.LIVE_CORRECTIONS_ENABLED === "true") {
     return true;
   }
-  return process.env.NODE_ENV === "development" && isAnthropicConfigured();
+  if (settings.liveCorrectionsEnabled) {
+    return true;
+  }
+  return isAnthropicConfigured();
 }
 
 export type LiveTranscriptionSettings = {
@@ -125,7 +131,7 @@ export async function getLiveTranscriptionSettings(): Promise<LiveTranscriptionS
     liveCorrectionsEnabled: resolveLiveCorrectionsEnabled(merged),
     maxLiveCorrectionRequestsPerLesson: Math.max(
       merged.maxLiveCorrectionRequestsPerLesson,
-      process.env.NODE_ENV === "development" ? 40 : 0,
+      40,
     ),
     liveCorrectionIntervalSeconds: Math.min(merged.liveCorrectionIntervalSeconds, 6),
   };

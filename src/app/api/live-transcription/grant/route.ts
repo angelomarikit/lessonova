@@ -4,6 +4,7 @@ import { DeepgramClient } from "@deepgram/sdk";
 import { isDeepgramConfigured, getDeepgramApiKey } from "@/lib/deepgram/config";
 import {
   getLiveTranscriptionSettings,
+  resolveClassroomLiveTranscriptionEnabled,
   resolveLiveTranscriptionEnabled,
 } from "@/lib/live-transcription/get-live-transcription-settings";
 import { resolveLiveTranscriptionRelayWebSocketUrl } from "@/lib/live-transcription/resolve-live-relay-url";
@@ -99,5 +100,6 @@ export async function POST() {
     authProtocol,
     relayWebSocketUrl,
     liveCorrectionsEnabled: settings.liveCorrectionsEnabled,
+    classroomLiveEnabled: resolveClassroomLiveTranscriptionEnabled(),
   });
 }

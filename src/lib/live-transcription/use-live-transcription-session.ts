@@ -210,13 +210,10 @@ export function useLiveTranscriptionSession(options: {
     }
 
     const mic = hasLiveAudioTrack(opts.micStream) ? opts.micStream : null;
-    const classroomLiveEnabled =
-      process.env.NEXT_PUBLIC_LIVE_TRANSCRIPTION_CLASSROOM !== "false";
-    const classroom =
-      classroomLiveEnabled && hasLiveAudioTrack(opts.classroomStream)
-        ? opts.classroomStream
-        : null;
-    if (!mic && !classroom) {
+    const classroomCandidate = hasLiveAudioTrack(opts.classroomStream)
+      ? opts.classroomStream
+      : null;
+    if (!mic && !classroomCandidate) {
       setLiveError("No audio streams available for live transcription.");
       setLiveConnecting(false);
       return;
@@ -252,12 +249,19 @@ export function useLiveTranscriptionSession(options: {
 
       const model = grantPayload.model ?? "nova-3";
       const authProtocol = grantPayload.authProtocol;
+      const classroomLiveEnabled = grantPayload.classroomLiveEnabled !== false;
       const latest = optionsRef.current;
       const micNow = hasLiveAudioTrack(latest.micStream) ? latest.micStream : null;
       const classroomNow =
         classroomLiveEnabled && hasLiveAudioTrack(latest.classroomStream)
           ? latest.classroomStream
           : null;
+
+      if (!classroomLiveEnabled && hasLiveAudioTrack(latest.classroomStream)) {
+        setCorrectionHint(
+          "Student live transcript is off on the server (LIVE_TRANSCRIPTION_CLASSROOM=false). Tab audio is still recorded.",
+        );
+      }
 
       let micReady = !micNow;
       let micFailed = false;
@@ -323,7 +327,7 @@ export function useLiveTranscriptionSession(options: {
             onError: (message) => {
               if (!attachOptions.required) {
                 setCorrectionHint(
-                  "Classroom tab live transcript unavailable; mic and recording still work.",
+                  "Student live transcript could not connect (classroom tab). Mic and recording still work — check network or try again after redeploy.",
                 );
                 return;
               }
@@ -375,7 +379,7 @@ export function useLiveTranscriptionSession(options: {
               : "Could not open live transcription connection.";
           if (!attachOptions.required) {
             setCorrectionHint(
-              "Classroom tab live transcript unavailable; mic and recording still work.",
+              "Student live transcript could not connect (classroom tab). Mic and recording still work.",
             );
             pcmStop?.();
             return;

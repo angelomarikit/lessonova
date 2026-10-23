@@ -3,6 +3,7 @@ export type LiveTranscriptionGrantPayload = {
   model?: string;
   authProtocol?: "bearer" | "token";
   relayWebSocketUrl?: string;
+  classroomLiveEnabled?: boolean;
   error?: string;
 };
 

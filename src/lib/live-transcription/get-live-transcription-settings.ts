@@ -18,6 +18,11 @@ export function isLiveTranscriptionAutoEnabled(): boolean {
   return isDeepgramConfigured();
 }
 
+/** Student speech uses shared tab audio — on by default (server opt-out only). */
+export function resolveClassroomLiveTranscriptionEnabled(): boolean {
+  return process.env.LIVE_TRANSCRIPTION_CLASSROOM !== "false";
+}
+
 export function resolveLiveTranscriptionEnabled(settings: LiveTranscriptionSettings): boolean {
   if (process.env.LIVE_TRANSCRIPTION_ENABLED === "false") {
     return false;
